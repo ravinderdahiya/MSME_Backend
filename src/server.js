@@ -1,16 +1,25 @@
 import express from "express"
 import dotenv from "dotenv"
 import userRoutes from "./user/user.routes.js"
+import cors from "cors"
 
 dotenv.config()
 
 const app = express()
 
-app.use(express.json())
-app.use(express.urlencoded({extended:false}))
+// CORS
+app.use(cors({
+  origin:'http://localhost:3000'
+}))
 
+// Middleware
+app.use(express.json())
+app.use(express.urlencoded({ extended: false }))
+
+// Routes
 app.use("/user", userRoutes)
 
-app.listen(5000, () => {
-  console.log("Server running on 5000")
+// Server
+app.listen(8080, () => {
+  console.log("Server running on 8080")
 })

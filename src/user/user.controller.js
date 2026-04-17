@@ -6,6 +6,8 @@ import jwt from "jsonwebtoken"
 export const signup = async (req, res) => {
   try {
     let { fullname, email, password, mobile } = req.body
+  console.log("SIGNUP API HIT")
+console.log(req.body)
 
     // 🔹 Trim inputs
     fullname = fullname?.trim()
