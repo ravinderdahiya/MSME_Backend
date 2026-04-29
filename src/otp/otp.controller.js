@@ -92,6 +92,7 @@ export const sendOtp = async (req, res) => {
           "tiny": false
         }
       )
+
       
       res.json({ 
         message: "OTP sent successfully",
@@ -102,6 +103,7 @@ export const sendOtp = async (req, res) => {
       })
     } catch (smsError) {
       console.error("SMS API Error:", smsError.message)
+
       // Still return success if SMS fails, OTP is saved in DB
       res.json({ 
         message: "OTP created successfully (SMS delivery pending)",
@@ -221,4 +223,5 @@ export const verifyOtp = async (req, res) => {
     console.error("Verify OTP Error:", error.message)
     res.status(500).json({ message: "Server error" })
   }
+
 }

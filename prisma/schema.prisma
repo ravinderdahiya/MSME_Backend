@@ -37,12 +37,13 @@ model SessionLog {
 }
 
 model Otp {
-  id        String   @id @default(cuid())
-  phone     String
-  otp       Int
-  attempts  Int      @default(0)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  
-  @@unique([phone, otp])
+  id              Int      @id @default(autoincrement())
+  phone           String
+  otp             String
+  expiresAt       DateTime
+  failedAttempts  Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([phone])
 }
