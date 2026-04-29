@@ -1,11 +1,18 @@
 import { Router } from "express"
-import { signup, login } from "./user.controller.js"
-import { authMiddleware } from "../middleware/auth.middleware.js"
+import { signup, login, logout, getSessionLogs, adminLogin, getMe } from "./user.controller.js"
+import { authMiddleware, isAdmin } from "../middleware/auth.middleware.js"
 
 const router = Router()
 
 router.post("/signup", signup)
 router.post("/login", login)
+router.post("/admin-login", adminLogin)
+router.post("/logout", authMiddleware, logout)
+
+// Get current user info
+router.get("/me", authMiddleware, getMe)
+
+router.get("/admin/session-logs", authMiddleware, isAdmin, getSessionLogs)
 
 // Protected route
 router.get("/profile", authMiddleware, (req, res) => {

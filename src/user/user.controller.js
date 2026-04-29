@@ -1,32 +1,37 @@
 import prisma from "../config/db.js"
 import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
+import { randomUUID } from "crypto"
+
+const getClientIp = (req) => {
+  const forwarded = req.headers["x-forwarded-for"]
+
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return forwarded.split(",")[0].trim()
+  }
+
+  return req.ip || req.socket?.remoteAddress || null
+}
 
 // ================= SIGNUP =================
 export const signup = async (req, res) => {
   try {
     let { fullname, email, password, mobile } = req.body
-  console.log("SIGNUP API HIT")
-console.log(req.body)
 
-    // 🔹 Trim inputs
     fullname = fullname?.trim()
     email = email?.trim()
     mobile = mobile?.trim()
 
-    // 🔹 Required validation
     if (!fullname || !email || !password || !mobile) {
       return res.status(400).json({ message: "All fields are required" })
     }
 
-    // 🔹 Name validation
     if (fullname.length < 3) {
       return res.status(400).json({
         message: "Name must be at least 3 characters"
       })
     }
 
-    // 🔹 Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -34,14 +39,12 @@ console.log(req.body)
       })
     }
 
-    // 🔹 Mobile validation (India)
     if (!/^[6-9]\d{9}$/.test(mobile)) {
       return res.status(400).json({
         message: "Invalid mobile number"
       })
     }
 
-    // 🔹 Password validation
     const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{6,}$/
     if (!passwordRegex.test(password)) {
       return res.status(400).json({
@@ -49,7 +52,6 @@ console.log(req.body)
       })
     }
 
-    // 🔹 Check existing user
     const exist = await prisma.user.findUnique({
       where: { email }
     })
@@ -60,10 +62,8 @@ console.log(req.body)
       })
     }
 
-    // 🔹 Hash password
     const hash = await bcrypt.hash(password, 10)
 
-    // 🔹 Create user
     const user = await prisma.user.create({
       data: {
         fullname,
@@ -73,7 +73,6 @@ console.log(req.body)
       }
     })
 
-    // 🔹 Generate token
     const token = jwt.sign(
       {
         id: user.id,
@@ -93,13 +92,11 @@ console.log(req.body)
         email: user.email
       }
     })
-
   } catch (error) {
     console.error("Signup Error:", error)
     res.status(500).json({ message: "Internal server error" })
   }
 }
-
 
 // ================= LOGIN =================
 export const login = async (req, res) => {
@@ -108,14 +105,12 @@ export const login = async (req, res) => {
 
     email = email?.trim()
 
-    // 🔹 Required validation
     if (!email || !password) {
       return res.status(400).json({
         message: "Email and password required"
       })
     }
 
-    // 🔹 Find user
     const user = await prisma.user.findUnique({
       where: { email }
     })
@@ -126,7 +121,6 @@ export const login = async (req, res) => {
       })
     }
 
-    // 🔹 Compare password
     const match = await bcrypt.compare(password, user.password)
 
     if (!match) {
@@ -135,12 +129,21 @@ export const login = async (req, res) => {
       })
     }
 
-    // 🔹 Generate token
+    const session = await prisma.sessionLog.create({
+      data: {
+        userId: user.id,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"]?.slice(0, 255) || null
+      }
+    })
+
     const token = jwt.sign(
       {
         id: user.id,
         email: user.email,
-        role: user.role
+        role: user.role,
+        sessionId: session.id,
+        jti: randomUUID()
       },
       process.env.AUTH_SECRET,
       { expiresIn: "1d" }
@@ -155,9 +158,203 @@ export const login = async (req, res) => {
         email: user.email
       }
     })
-
   } catch (error) {
     console.error("Login Error:", error)
     res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= LOGOUT =================
+export const logout = async (req, res) => {
+  try {
+    const userId = req.user?.id
+    const sessionId = req.user?.sessionId
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" })
+    }
+
+    let updated = 0
+
+    if (sessionId) {
+      const result = await prisma.sessionLog.updateMany({
+        where: {
+          id: sessionId,
+          userId,
+          isActive: true
+        },
+        data: {
+          logoutAt: new Date(),
+          isActive: false
+        }
+      })
+
+      updated = result.count
+    }
+
+    if (!updated) {
+      const latestActiveSession = await prisma.sessionLog.findFirst({
+        where: {
+          userId,
+          isActive: true
+        },
+        orderBy: {
+          loginAt: "desc"
+        }
+      })
+
+      if (latestActiveSession) {
+        await prisma.sessionLog.update({
+          where: { id: latestActiveSession.id },
+          data: {
+            logoutAt: new Date(),
+            isActive: false
+          }
+        })
+      }
+    }
+
+    return res.json({ message: "Logout successful" })
+  } catch (error) {
+    console.error("Logout Error:", error)
+    return res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= ADMIN LOGIN =================
+export const adminLogin = async (req, res) => {
+  try {
+    const { adminId, password } = req.body
+
+    if (!adminId || !password) {
+      return res.status(400).json({ message: "Admin ID and password required" })
+    }
+
+    // Find admin user by email or fullname with admin/superadmin role
+    const admin = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: adminId },
+          { fullname: adminId }
+        ],
+        role: { in: ["admin", "superadmin"] }
+      }
+    })
+
+    if (!admin) {
+      return res.status(404).json({ message: "Admin not found" })
+    }
+
+    const match = await bcrypt.compare(password, admin.password)
+
+    if (!match) {
+      return res.status(401).json({ message: "Wrong password" })
+    }
+
+    // Create session log
+    const session = await prisma.sessionLog.create({
+      data: {
+        userId: admin.id,
+        ipAddress: getClientIp(req),
+        userAgent: req.headers["user-agent"]?.slice(0, 255) || null
+      }
+    })
+
+    const token = jwt.sign(
+      {
+        id: admin.id,
+        email: admin.email,
+        role: admin.role,
+        sessionId: session.id,
+        jti: randomUUID()
+      },
+      process.env.AUTH_SECRET,
+      { expiresIn: "1d" }
+    )
+
+    res.json({
+      message: "Admin login success",
+      token,
+      user: {
+        id: admin.id,
+        email: admin.email,
+        fullname: admin.fullname,
+        role: admin.role
+      }
+    })
+  } catch (error) {
+    console.error("Admin Login Error:", error)
+    res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= GET ME (Current User) =================
+export const getMe = async (req, res) => {
+  try {
+    const userId = req.user?.id
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" })
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        fullname: true,
+        email: true,
+        mobile: true,
+        role: true,
+        createdAt: true
+      }
+    })
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    res.json({ user })
+  } catch (error) {
+    console.error("GetMe Error:", error)
+    res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= ADMIN SESSION LOGS =================
+export const getSessionLogs = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1)
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100)
+    const skip = (page - 1) * limit
+
+    const [total, sessions] = await prisma.$transaction([
+      prisma.sessionLog.count(),
+      prisma.sessionLog.findMany({
+        skip,
+        take: limit,
+        orderBy: { loginAt: "desc" },
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullname: true,
+              email: true,
+              role: true
+            }
+          }
+        }
+      })
+    ])
+
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      sessions
+    })
+  } catch (error) {
+    console.error("Get Session Logs Error:", error)
+    return res.status(500).json({ message: "Internal server error" })
   }
 }
