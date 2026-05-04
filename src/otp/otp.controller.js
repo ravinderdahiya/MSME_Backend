@@ -53,8 +53,8 @@ export const sendOtp = async (req, res) => {
       return res.status(400).json({ message: "Invalid phone format" })
     }
 
-    // Generate 4-digit OTP
-    const otp = Math.floor(1000 + Math.random() * 9000)
+    // Generate 6-digit OTP
+  const otp = Math.floor(100000 + Math.random() * 900000)
 
     // Delete existing OTP for this phone
     await prisma.otp.deleteMany({
@@ -65,7 +65,7 @@ export const sendOtp = async (req, res) => {
     await prisma.otp.create({
       data: {
         phone,
-        otp,
+        otp: String(otp),
         expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
       },
     })
@@ -138,30 +138,29 @@ export const verifyOtp = async (req, res) => {
       return res.status(400).json({ message: "Invalid phone format" })
     }
 
-    const otpNumber = Number(otp)
-    if (isNaN(otpNumber)) {
-      return res.status(400).json({ message: "OTP must be a number" })
-    }
 
-    // Find OTP record
-    const record = await prisma.otp.findFirst({
-      where: { 
-        phone,
-        otp: otpNumber
-      }
-    })
+    const otpString = String(otp)
+
+if (otpString.length !== 6) {
+  return res.status(400).json({ message: "OTP must be 6 digits" })
+}
+
+const record = await prisma.otp.findFirst({
+  where: { 
+    phone,
+    otp: otpString
+  }
+})
+    
 
     if (!record) {
       return res.status(400).json({ message: "Invalid OTP" })
     }
 
     // Check OTP expiration
-    const now = new Date()
-    const expiresAt = new Date(record.expiresAt)
-
-    if (expiresAt < now) {
-      return res.status(400).json({ message: "OTP expired" })
-    }
+   if (new Date(record.expiresAt) < new Date()) {
+  return res.status(400).json({ message: "OTP expired ⏳" })
+   }
 
     // Check if user exists, else create new user
     let user = await prisma.user.findFirst({
