@@ -12,7 +12,7 @@ const router = Router()
 
 router.get("/frontend-config", getFrontendConfig)
 
-router.get("/", authMiddleware, isAdmin, listApiUrls)
+router.get("/", authMiddleware, listApiUrls)
 router.post("/", authMiddleware, isAdmin, createApiUrl)
 router.put("/:id", authMiddleware, isAdmin, updateApiUrl)
 router.delete("/:id", authMiddleware, isAdmin, deleteApiUrl)

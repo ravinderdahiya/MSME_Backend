@@ -2,18 +2,6 @@ import axios from "axios"
 import prisma from "../config/db.js"
 
 const sanitizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "")
-const DEFAULT_SERVICE_ROOT = "https://hsacggm.in/server/rest/services/MSME_HARSAC"
-const DEFAULT_MAP_SERVICE_URLS = {
-  MSME_BASE_REFERENCE: `${DEFAULT_SERVICE_ROOT}/Base_Reference_Layers/MapServer`,
-  MSME_ADMIN_BOUNDARIES: `${DEFAULT_SERVICE_ROOT}/Administrative_Boundaries/MapServer`,
-  MSME_ENVIRONMENT: `${DEFAULT_SERVICE_ROOT}/Environmental_Constraints/MapServer`,
-  MSME_INVESTMENT: `${DEFAULT_SERVICE_ROOT}/Investment_Zones/MapServer`,
-  MSME_SOCIAL: `${DEFAULT_SERVICE_ROOT}/Social_Infrastructure/MapServer`,
-  MSME_TRANSPORT: `${DEFAULT_SERVICE_ROOT}/Transportation_Infrastructure/MapServer`,
-  MSME_UTILITIES: `${DEFAULT_SERVICE_ROOT}/Utilities/MapServer`,
-  MSME_CADASTRAL: `${DEFAULT_SERVICE_ROOT}/Haryana_Cadastral/MapServer`,
-  MSME_CONSTITUENCY: `${DEFAULT_SERVICE_ROOT}/Constituency_Boundaries/MapServer`,
-}
 
 const buildProxyHeaders = (headers) => {
   const out = {}
@@ -47,8 +35,7 @@ export const proxyMapserverRequest = async (req, res) => {
       },
     })
 
-    const resolvedDefaultUrl = DEFAULT_MAP_SERVICE_URLS[serviceKey]
-    const baseUrl = sanitizeBaseUrl(serviceConfig?.url || resolvedDefaultUrl)
+    const baseUrl = sanitizeBaseUrl(serviceConfig?.url)
     if (!baseUrl) {
       return res.status(404).json({ message: `Service key not found: ${serviceKey}` })
     }

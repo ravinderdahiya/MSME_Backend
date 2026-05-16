@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { signup, login, googleLogin, logout, getSessionLogs, adminLogin, getMe } from "./user.controller.js"
+import { signup, login, googleLogin, logout, getSessionLogs, adminLogin, getMe, getAdminUsers, updateAdminUserStatus } from "./user.controller.js"
 import { authMiddleware, isAdmin } from "../middleware/auth.middleware.js"
 
 const router = Router()
@@ -14,6 +14,8 @@ router.post("/logout", authMiddleware, logout)
 router.get("/me", authMiddleware, getMe)
 
 router.get("/admin/session-logs", authMiddleware, isAdmin, getSessionLogs)
+router.get("/admin/users", authMiddleware, isAdmin, getAdminUsers)
+router.patch("/admin/users/:id/status", authMiddleware, isAdmin, updateAdminUserStatus)
 
 // Protected route
 router.get("/profile", authMiddleware, (req, res) => {

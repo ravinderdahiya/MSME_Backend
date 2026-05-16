@@ -1,30 +1,7 @@
 import prisma from "../config/db.js"
-
-const FRONTEND_CONFIG_KEYS = [
-  "MSME_BASE_REFERENCE",
-  "MSME_ADMIN_BOUNDARIES",
-  "MSME_ENVIRONMENT",
-  "MSME_INVESTMENT",
-  "MSME_SOCIAL",
-  "MSME_TRANSPORT",
-  "MSME_UTILITIES",
-  "MSME_CADASTRAL",
-  "MSME_CONSTITUENCY",
-]
+import { FRONTEND_CONFIG_KEYS } from "./default-map-services.js"
 
 const sanitizeUrl = (value) => String(value || "").trim().replace(/\/+$/, "")
-const DEFAULT_SERVICE_ROOT = "https://hsacggm.in/server/rest/services/MSME_HARSAC"
-const DEFAULT_MAP_SERVICE_URLS = {
-  MSME_BASE_REFERENCE: `${DEFAULT_SERVICE_ROOT}/Base_Reference_Layers/MapServer`,
-  MSME_ADMIN_BOUNDARIES: `${DEFAULT_SERVICE_ROOT}/Administrative_Boundaries/MapServer`,
-  MSME_ENVIRONMENT: `${DEFAULT_SERVICE_ROOT}/Environmental_Constraints/MapServer`,
-  MSME_INVESTMENT: `${DEFAULT_SERVICE_ROOT}/Investment_Zones/MapServer`,
-  MSME_SOCIAL: `${DEFAULT_SERVICE_ROOT}/Social_Infrastructure/MapServer`,
-  MSME_TRANSPORT: `${DEFAULT_SERVICE_ROOT}/Transportation_Infrastructure/MapServer`,
-  MSME_UTILITIES: `${DEFAULT_SERVICE_ROOT}/Utilities/MapServer`,
-  MSME_CADASTRAL: `${DEFAULT_SERVICE_ROOT}/Haryana_Cadastral/MapServer`,
-  MSME_CONSTITUENCY: `${DEFAULT_SERVICE_ROOT}/Constituency_Boundaries/MapServer`,
-}
 
 export const getFrontendConfig = async (req, res) => {
   try {
@@ -36,14 +13,17 @@ export const getFrontendConfig = async (req, res) => {
       orderBy: { key: "asc" },
     })
 
-    const map = { ...DEFAULT_MAP_SERVICE_URLS }
+    const map = {}
     rows.forEach((row) => {
       map[row.key] = sanitizeUrl(row.url)
     })
 
+    const missingKeys = FRONTEND_CONFIG_KEYS.filter((key) => !map[key])
+
     res.json({
       source: "database",
       mapServices: map,
+      missingKeys,
     })
   } catch (error) {
     console.error("getFrontendConfig error:", error)

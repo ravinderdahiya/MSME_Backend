@@ -3,6 +3,38 @@ import bcrypt from "bcrypt"
 import jwt from "jsonwebtoken"
 import { randomUUID } from "crypto"
 
+const normalizeText = (value) => String(value || "").trim()
+const normalizeRole = (value) => normalizeText(value).toLowerCase()
+
+const toLabelCase = (value) => {
+  const text = normalizeText(value)
+  if (!text) return ""
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase()
+}
+
+const toUserStatus = ({ role, hasActiveSession }) => {
+  const normalizedRole = normalizeRole(role)
+  if (normalizedRole === "blocked") {
+    return "Blocked"
+  }
+  return hasActiveSession ? "Active" : "Inactive"
+}
+
+const formatDateTime = (value) => {
+  if (!value) return "-"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "-"
+  return date.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata"
+  })
+}
+
 const getClientIp = (req) => {
   const forwarded = req.headers["x-forwarded-for"]
 
@@ -166,8 +198,15 @@ export const login = async (req, res) => {
 
 const verifyGoogleIdToken = async (idToken) => {
   try {
+    const tokenInfoUrl = process.env.GOOGLE_TOKENINFO_URL
+    if (!tokenInfoUrl) {
+      console.warn("GOOGLE_TOKENINFO_URL is not configured.")
+      return null
+    }
+
+    const separator = tokenInfoUrl.includes("?") ? "&" : "?"
     const response = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`
+      `${tokenInfoUrl}${separator}id_token=${encodeURIComponent(idToken)}`
     )
 
     if (!response.ok) {
@@ -215,13 +254,14 @@ export const googleLogin = async (req, res) => {
     if (!user) {
       const generatedPassword = randomUUID()
       const hashedPassword = await bcrypt.hash(generatedPassword, 10)
+      const fallbackMobile = process.env.GOOGLE_DEFAULT_MOBILE || `g_${Date.now()}`
 
       user = await prisma.user.create({
         data: {
           fullname,
           email,
           password: hashedPassword,
-          mobile: "0000000000",
+          mobile: fallbackMobile,
           role: "user"
         }
       })
@@ -453,6 +493,202 @@ export const getSessionLogs = async (req, res) => {
     })
   } catch (error) {
     console.error("Get Session Logs Error:", error)
+    return res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= ADMIN USERS (LIST + STATS) =================
+export const getAdminUsers = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1)
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 100)
+    const skip = (page - 1) * limit
+
+    const search = normalizeText(req.query.search)
+    const roleFilter = normalizeRole(req.query.role)
+    const statusFilter = normalizeRole(req.query.status)
+
+    const where = {}
+
+    if (search) {
+      where.OR = [
+        { fullname: { contains: search, mode: "insensitive" } },
+        { email: { contains: search, mode: "insensitive" } },
+        { mobile: { contains: search, mode: "insensitive" } }
+      ]
+    }
+
+    if (roleFilter && roleFilter !== "all") {
+      where.role = roleFilter
+    }
+
+    if (statusFilter === "active") {
+      where.sessions = { some: { isActive: true } }
+    } else if (statusFilter === "inactive") {
+      where.AND = [...(where.AND || []), { sessions: { none: { isActive: true } }, role: { not: "blocked" } }]
+    } else if (statusFilter === "blocked") {
+      where.role = "blocked"
+    }
+
+    const [totalUsers, activeUsers, blockedUsers, totalFiltered, users] = await prisma.$transaction([
+      prisma.user.count(),
+      prisma.user.count({ where: { sessions: { some: { isActive: true } }, role: { not: "blocked" } } }),
+      prisma.user.count({ where: { role: "blocked" } }),
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          fullname: true,
+          email: true,
+          role: true,
+          mobile: true,
+          createdAt: true,
+          sessions: {
+            orderBy: { loginAt: "desc" },
+            take: 1,
+            select: {
+              loginAt: true,
+              isActive: true
+            }
+          }
+        }
+      })
+    ])
+
+    const inactiveUsers = Math.max(totalUsers - activeUsers - blockedUsers, 0)
+
+    const mappedUsers = users.map((user) => {
+      const latestSession = user.sessions[0]
+      const hasActiveSession = Boolean(latestSession?.isActive)
+      const status = toUserStatus({ role: user.role, hasActiveSession })
+      return {
+        id: user.id,
+        name: user.fullname,
+        email: user.email,
+        mobile: user.mobile,
+        role: toLabelCase(user.role || "user"),
+        status,
+        lastActive: formatDateTime(latestSession?.loginAt || user.createdAt)
+      }
+    })
+
+    const roleRows = await prisma.user.groupBy({
+      by: ["role"],
+      _count: { role: true }
+    })
+
+    const roleOptions = ["All", ...roleRows.map((row) => toLabelCase(row.role))]
+
+    return res.json({
+      summary: {
+        totalUsers,
+        activeUsers,
+        inactiveUsers,
+        blockedUsers
+      },
+      filters: {
+        roleOptions,
+        statusOptions: ["All", "Active", "Inactive", "Blocked"]
+      },
+      users: mappedUsers,
+      pagination: {
+        page,
+        limit,
+        total: totalFiltered,
+        totalPages: Math.max(Math.ceil(totalFiltered / limit), 1)
+      }
+    })
+  } catch (error) {
+    console.error("Get Admin Users Error:", error)
+    return res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+// ================= ADMIN USER STATUS UPDATE =================
+export const updateAdminUserStatus = async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id, 10)
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ message: "Invalid user id" })
+    }
+
+    const requestedStatus = toLabelCase(req.body?.status)
+    if (!["Active", "Inactive", "Blocked"].includes(requestedStatus)) {
+      return res.status(400).json({ message: "Invalid status. Use Active, Inactive or Blocked." })
+    }
+
+    const actorId = Number(req.user?.id || 0)
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        fullname: true,
+        email: true,
+        role: true
+      }
+    })
+
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    if (targetUser.id === actorId) {
+      return res.status(400).json({ message: "You cannot update your own status." })
+    }
+
+    const targetRole = normalizeRole(targetUser.role)
+    if (["admin", "superadmin"].includes(targetRole)) {
+      return res.status(403).json({ message: "Admin/Superadmin status cannot be changed from this action." })
+    }
+
+    const updateData = {}
+    const sessionUpdateData = {}
+
+    if (requestedStatus === "Blocked") {
+      updateData.role = "blocked"
+      sessionUpdateData.isActive = false
+      sessionUpdateData.logoutAt = new Date()
+    } else if (requestedStatus === "Inactive") {
+      if (targetRole === "blocked") {
+        updateData.role = "user"
+      }
+      sessionUpdateData.isActive = false
+      sessionUpdateData.logoutAt = new Date()
+    } else if (requestedStatus === "Active") {
+      if (targetRole === "blocked") {
+        const nextRole = normalizeRole(req.body?.role)
+        updateData.role = nextRole && nextRole !== "blocked" ? nextRole : "user"
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      if (Object.keys(updateData).length) {
+        await tx.user.update({
+          where: { id: userId },
+          data: updateData
+        })
+      }
+
+      if (Object.keys(sessionUpdateData).length) {
+        await tx.sessionLog.updateMany({
+          where: {
+            userId,
+            isActive: true
+          },
+          data: sessionUpdateData
+        })
+      }
+    })
+
+    return res.json({
+      message: `User status updated to ${requestedStatus}.`
+    })
+  } catch (error) {
+    console.error("Update Admin User Status Error:", error)
     return res.status(500).json({ message: "Internal server error" })
   }
 }

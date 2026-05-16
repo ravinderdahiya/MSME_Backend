@@ -2,6 +2,7 @@ import prisma from "../config/db.js"
 import axios from "axios"
 import jwt from "jsonwebtoken"
 import { randomUUID } from "crypto"
+import bcrypt from "bcrypt"
 
 // Helper function to normalize phone number
 const normalizePhone = (phone) => {
@@ -34,6 +35,23 @@ const getClientIp = (req) => {
     return forwarded.split(",")[0].trim()
   }
   return req.ip || req.socket?.remoteAddress || null
+}
+
+const getSmsConfig = () => {
+  return {
+    apiUrl: process.env.SMS_API_URL,
+    apiKey: process.env.SMS_API_KEY,
+    senderId: process.env.SMS_SENDER_ID,
+    tempDltId: process.env.SMS_TEMP_DLT_ID,
+    route: process.env.SMS_ROUTE,
+    trans: process.env.SMS_TRANS !== undefined ? Number(process.env.SMS_TRANS) : undefined,
+    unicode: process.env.SMS_UNICODE !== undefined ? Number(process.env.SMS_UNICODE) : undefined,
+    flash: process.env.SMS_FLASH !== undefined ? String(process.env.SMS_FLASH).toLowerCase() === "true" : undefined,
+    tiny: process.env.SMS_TINY !== undefined ? String(process.env.SMS_TINY).toLowerCase() === "true" : undefined,
+    groupIds: String(process.env.SMS_GROUP_IDS || "").trim()
+      ? String(process.env.SMS_GROUP_IDS).split(",").map((item) => item.trim()).filter(Boolean)
+      : undefined,
+  }
 }
 
 // ===================== SEND OTP =====================
@@ -74,26 +92,42 @@ export const sendOtp = async (req, res) => {
 
     console.log("OTP Created:", { phone, otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000) })
 
-    // Send SMS via Pixabits API
+    // Send SMS via configured provider
     try {
       const message = `Your One Time Password is ${otp} for your application. Don't share OTP with anyone.HARSAC`
+      const smsConfig = getSmsConfig()
+      const hasSmsConfig =
+        Boolean(smsConfig.apiUrl) &&
+        Boolean(smsConfig.apiKey) &&
+        Boolean(smsConfig.senderId) &&
+        Boolean(smsConfig.tempDltId)
+
+      if (!hasSmsConfig) {
+        return res.json({
+          message: "OTP created successfully (SMS delivery not configured)",
+          phone,
+          otp: process.env.NODE_ENV === "development" ? otp : undefined,
+          smsSent: false,
+          warning: "SMS configuration missing",
+          expiresIn: "5 minutes"
+        })
+      }
       
-      await axios.post(
-        "https://sms.pixabits.in/smsapi/sms/custom/send",
-        {
-          "key": process.env.SMS_API_KEY || "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI2OTc4ODkzZGE1OTFkNjVmNDZiMzQxYmM6Njk3ODg5M2RhNTkxZDY1ZjQ2YjM0MWJlOkhBUlNBQzo2NTJmYTQ0ZWYzMTc3NjdlOTdkYTMyNmYiLCJpYXQiOjE3Njk1MTA1NTV9.lqYYXdcDUada9lKBa07uJT2hNZzpWjr8D3QmTZzGP6M",
-          "text": message,
-          "senderId": process.env.SMS_SENDER_ID || "HARSAC",
-          "tempDltId": process.env.SMS_TEMP_DLT_ID || "1407169838783023275",
-          "route": "Domestic",
-          "phoneno": formatSmsPhone(phone),
-          "groupIds": [" "],
-          "trans": 1,
-          "unicode": 0,
-          "flash": false,
-          "tiny": false
-        }
-      )
+      const smsPayload = {
+        key: smsConfig.apiKey,
+        text: message,
+        senderId: smsConfig.senderId,
+        tempDltId: smsConfig.tempDltId,
+        phoneno: formatSmsPhone(phone),
+      }
+      if (smsConfig.route !== undefined) smsPayload.route = smsConfig.route
+      if (smsConfig.groupIds !== undefined) smsPayload.groupIds = smsConfig.groupIds
+      if (smsConfig.trans !== undefined) smsPayload.trans = smsConfig.trans
+      if (smsConfig.unicode !== undefined) smsPayload.unicode = smsConfig.unicode
+      if (smsConfig.flash !== undefined) smsPayload.flash = smsConfig.flash
+      if (smsConfig.tiny !== undefined) smsPayload.tiny = smsConfig.tiny
+
+      await axios.post(smsConfig.apiUrl, smsPayload)
 
       
       res.json({ 
@@ -170,13 +204,15 @@ const record = await prisma.otp.findFirst({
     })
 
     if (!user) {
+      const generatedPasswordHash = await bcrypt.hash(randomUUID(), 10)
+      const otpDefaultFullname = process.env.OTP_DEFAULT_FULLNAME || phone
       // Create new user with mobile
       user = await prisma.user.create({
         data: { 
           mobile: phone,
-          fullname: "User",
+          fullname: otpDefaultFullname,
           email: `user_${Date.now()}@msme.com`,
-          password: "default_password"
+          password: generatedPasswordHash
         }
       })
     }

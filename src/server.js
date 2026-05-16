@@ -5,7 +5,9 @@ import prisma from "./config/db.js"
 import userRoutes from "./user/user.routes.js"
 import otpRoutes from "./otp/otp.routes.js"
 import apiUrlRoutes from "./api-url/api-url.routes.js"
+import dataServiceRoutes from "./data-service/data-service.routes.js"
 import mapserverRoutes from "./mapserver/mapserver.routes.js"
+import { getDefaultMapServiceEntriesFromEnv } from "./api-url/default-map-services.js"
 import cors from "cors"
 import { authMiddleware } from "./middleware/auth.middleware.js"
 
@@ -53,16 +55,108 @@ const ensureAdminUser = async () => {
   }
 }
 
+const ensureDefaultApiUrls = async () => {
+  try {
+    const entries = getDefaultMapServiceEntriesFromEnv(process.env)
+    if (!entries.length) {
+      console.warn("No default map service URLs found in env. Skipping API URL bootstrap.")
+      return
+    }
+
+    for (const entry of entries) {
+      await prisma.apiUrl.upsert({
+        where: { key: entry.key },
+        create: {
+          key: entry.key,
+          name: entry.name,
+          url: entry.url,
+          description: entry.description,
+          category: entry.category,
+          isActive: entry.isActive,
+        },
+        update: {},
+      })
+    }
+  } catch (error) {
+    console.error("Failed to seed default map service API URLs:", error)
+  }
+}
+
+const inferServiceType = (endpoint) => {
+  const value = String(endpoint || "").toLowerCase()
+  if (value.includes("wms")) return "WMS"
+  if (value.includes("wmts")) return "WMTS"
+  if (value.includes("mapserver")) return "ArcGIS MapServer"
+  if (value.includes("featureserver")) return "ArcGIS FeatureServer"
+  if (value.includes("imageserver")) return "ArcGIS ImageServer"
+  return "REST API"
+}
+
+const ensureDefaultDataServices = async () => {
+  try {
+    const existingCount = await prisma.dataService.count()
+    if (existingCount > 0) {
+      return
+    }
+
+    const legacyServices = await prisma.apiUrl.findMany({
+      where: { category: "service" },
+      orderBy: [{ key: "asc" }],
+    })
+
+    if (!legacyServices.length) {
+      return
+    }
+
+    for (const item of legacyServices) {
+      await prisma.dataService.upsert({
+        where: { key: item.key },
+        create: {
+          key: item.key,
+          name: item.name,
+          endpoint: item.url,
+          serviceType: inferServiceType(item.url),
+          description: item.description,
+          isActive: item.isActive,
+          lastChecked: item.updatedAt || item.createdAt || new Date(),
+        },
+        update: {},
+      })
+    }
+
+    console.log(`Data services bootstrap complete: ${legacyServices.length} migrated from ApiUrl.`)
+  } catch (error) {
+    console.error("Failed to bootstrap default data services:", error)
+  }
+}
+
+const parseCorsOrigins = () => {
+  return String(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
+const createCorsOptions = () => {
+  const origins = parseCorsOrigins()
+  if (!origins.length) {
+    console.warn("CORS_ORIGINS is not set. Allowing all origins.")
+    return { origin: true, credentials: true }
+  }
+
+  return {
+    credentials: true,
+    origin: (origin, callback) => {
+      if (!origin || origins.includes(origin)) {
+        return callback(null, true)
+      }
+      return callback(new Error("Not allowed by CORS"))
+    },
+  }
+}
+
 // CORS
-app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174"
-  ],
-  credentials: true
-}));
+app.use(cors(createCorsOptions()))
 
 // Middleware
 app.use(express.json())
@@ -72,6 +166,7 @@ app.use(express.urlencoded({ extended: false }))
 app.use("/user", userRoutes)
 app.use("/otp", otpRoutes)
 app.use("/api-url", apiUrlRoutes)
+app.use("/data-services", dataServiceRoutes)
 app.use("/mapserver", authMiddleware, mapserverRoutes)
 
 app.get("/", (req, res) => {
@@ -83,6 +178,8 @@ const PORT = process.env.PORT || 8080
 
 const startServer = async () => {
   await ensureAdminUser()
+  await ensureDefaultApiUrls()
+  await ensureDefaultDataServices()
   app.listen(PORT, () => {
     console.log(`Server running on ${PORT}`)
   })
