@@ -15,6 +15,25 @@ dotenv.config()
 
 const app = express()
 
+const normalizeBasePath = (value) => {
+  const raw = String(value || "").trim()
+  if (!raw || raw === "/") return ""
+  return `/${raw.replace(/^\/+/, "").replace(/\/+$/, "")}`
+}
+
+const API_BASE_PATH = normalizeBasePath(process.env.API_BASE_PATH || "/")
+const withApiBasePath = (routePath) => `${API_BASE_PATH}${routePath}`
+const ENABLE_LEGACY_ROOT_ROUTES =
+  String(process.env.ENABLE_LEGACY_ROOT_ROUTES || "true").toLowerCase() !== "false"
+
+const mountApiRoute = (routePath, ...middlewares) => {
+  app.use(withApiBasePath(routePath), ...middlewares)
+
+  if (ENABLE_LEGACY_ROOT_ROUTES && API_BASE_PATH) {
+    app.use(routePath, ...middlewares)
+  }
+}
+
 const ensureAdminUser = async () => {
   try {
     const existingAdmin = await prisma.user.findFirst({
@@ -193,15 +212,32 @@ app.use(express.urlencoded({
 }));
 
 // Routes
-app.use("/user", userRoutes)
-app.use("/otp", otpRoutes)
-app.use("/api-url", apiUrlRoutes)
-app.use("/data-services", dataServiceRoutes)
-app.use("/mapserver", authMiddleware, mapserverRoutes)
+mountApiRoute("/user", userRoutes)
+mountApiRoute("/otp", otpRoutes)
+mountApiRoute("/api-url", apiUrlRoutes)
+mountApiRoute("/data-services", dataServiceRoutes)
+mountApiRoute("/mapserver", authMiddleware, mapserverRoutes)
 
 app.get("/", (req, res) => {
   res.send("Backend is running")
 })
+
+app.get(withApiBasePath("/health"), (req, res) => {
+  res.json({
+    status: "ok",
+    apiBasePath: API_BASE_PATH || "/",
+  })
+})
+
+if (ENABLE_LEGACY_ROOT_ROUTES && API_BASE_PATH) {
+  app.get("/health", (req, res) => {
+    res.json({
+      status: "ok",
+      apiBasePath: API_BASE_PATH || "/",
+      legacy: true,
+    })
+  })
+}
 
 // Server
 const PORT = process.env.PORT || 8080
@@ -212,6 +248,8 @@ const startServer = async () => {
   await ensureDefaultDataServices()
     app.listen(PORT, () => {
     console.log(`Server running on ${PORT}`)
+    console.log(`API base path: ${API_BASE_PATH || "/"}`)
+    console.log(`Legacy root routes: ${ENABLE_LEGACY_ROOT_ROUTES ? "enabled" : "disabled"}`)
   })
 
   /*app.listen(PORT, '172.16.1.50', () => {
