@@ -74,8 +74,8 @@ export const createApiUrl = async (req, res) => {
 
 export const updateApiUrl = async (req, res) => {
   try {
-    const id = Number(req.params.id)
-    if (!Number.isFinite(id)) {
+    const id = String(req.params.id || "").trim()
+    if (!id) {
       return res.status(400).json({ message: "Invalid id" })
     }
 
@@ -109,8 +109,8 @@ export const updateApiUrl = async (req, res) => {
 
 export const deleteApiUrl = async (req, res) => {
   try {
-    const id = Number(req.params.id)
-    if (!Number.isFinite(id)) {
+    const id = String(req.params.id || "").trim()
+    if (!id) {
       return res.status(400).json({ message: "Invalid id" })
     }
 

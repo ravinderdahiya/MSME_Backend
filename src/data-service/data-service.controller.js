@@ -56,8 +56,8 @@ export const createDataService = async (req, res) => {
 
 export const updateDataService = async (req, res) => {
   try {
-    const id = Number(req.params.id)
-    if (!Number.isFinite(id)) {
+    const id = String(req.params.id || "").trim()
+    if (!id) {
       return res.status(400).json({ message: "Invalid id" })
     }
 
@@ -101,8 +101,8 @@ export const updateDataService = async (req, res) => {
 
 export const deleteDataService = async (req, res) => {
   try {
-    const id = Number(req.params.id)
-    if (!Number.isFinite(id)) {
+    const id = String(req.params.id || "").trim()
+    if (!id) {
       return res.status(400).json({ message: "Invalid id" })
     }
 
