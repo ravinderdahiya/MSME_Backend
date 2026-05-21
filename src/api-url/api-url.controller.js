@@ -2,6 +2,21 @@ import prisma from "../config/db.js"
 import { FRONTEND_CONFIG_KEYS } from "./default-map-services.js"
 
 const sanitizeUrl = (value) => String(value || "").trim().replace(/\/+$/, "")
+const prismaIdValidationRegex = /Argument\s+`?id`?.*Expected\s+(Int|String)/i
+
+const parseIdCandidates = (value) => {
+  const raw = String(value || "").trim()
+  if (!raw) return []
+  const asInt = Number(raw)
+  const hasCanonicalInt = Number.isInteger(asInt) && String(asInt) === raw
+  return hasCanonicalInt ? [asInt, raw] : [raw]
+}
+
+const isPrismaIdValidationError = (error) => {
+  const name = String(error?.name || "")
+  const message = String(error?.message || "")
+  return name.includes("PrismaClientValidationError") || prismaIdValidationRegex.test(message)
+}
 
 export const getFrontendConfig = async (req, res) => {
   try {
@@ -74,8 +89,8 @@ export const createApiUrl = async (req, res) => {
 
 export const updateApiUrl = async (req, res) => {
   try {
-    const id = String(req.params.id || "").trim()
-    if (!id) {
+    const idCandidates = parseIdCandidates(req.params.id)
+    if (!idCandidates.length) {
       return res.status(400).json({ message: "Invalid id" })
     }
 
@@ -89,10 +104,33 @@ export const updateApiUrl = async (req, res) => {
     if (category !== undefined) data.category = String(category).trim()
     if (isActive !== undefined) data.isActive = Boolean(isActive)
 
-    const updated = await prisma.apiUrl.update({
-      where: { id },
-      data,
-    })
+    let updated = null
+    let lastError = null
+    for (const id of idCandidates) {
+      try {
+        updated = await prisma.apiUrl.update({
+          where: { id },
+          data,
+        })
+        break
+      } catch (error) {
+        lastError = error
+        if (error?.code === "P2002") {
+          return res.status(409).json({ message: "Key already exists" })
+        }
+        if (error?.code === "P2025" || isPrismaIdValidationError(error)) {
+          continue
+        }
+        throw error
+      }
+    }
+
+    if (!updated) {
+      if (lastError?.code === "P2025" || isPrismaIdValidationError(lastError)) {
+        return res.status(404).json({ message: "API URL not found" })
+      }
+      throw lastError || new Error("Failed to update API URL")
+    }
 
     res.json({ message: "API URL updated", data: updated })
   } catch (error) {
@@ -109,12 +147,34 @@ export const updateApiUrl = async (req, res) => {
 
 export const deleteApiUrl = async (req, res) => {
   try {
-    const id = String(req.params.id || "").trim()
-    if (!id) {
+    const idCandidates = parseIdCandidates(req.params.id)
+    if (!idCandidates.length) {
       return res.status(400).json({ message: "Invalid id" })
     }
 
-    await prisma.apiUrl.delete({ where: { id } })
+    let deleted = false
+    let lastError = null
+    for (const id of idCandidates) {
+      try {
+        await prisma.apiUrl.delete({ where: { id } })
+        deleted = true
+        break
+      } catch (error) {
+        lastError = error
+        if (error?.code === "P2025" || isPrismaIdValidationError(error)) {
+          continue
+        }
+        throw error
+      }
+    }
+
+    if (!deleted) {
+      if (lastError?.code === "P2025" || isPrismaIdValidationError(lastError)) {
+        return res.status(404).json({ message: "API URL not found" })
+      }
+      throw lastError || new Error("Failed to delete API URL")
+    }
+
     res.json({ message: "API URL deleted" })
   } catch (error) {
     console.error("deleteApiUrl error:", error)
