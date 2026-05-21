@@ -93,7 +93,13 @@ const ensureDefaultApiUrls = async () => {
           category: entry.category,
           isActive: entry.isActive,
         },
-        update: {},
+        update: {
+          name: entry.name,
+          url: entry.url,
+          description: entry.description,
+          category: entry.category,
+          isActive: entry.isActive,
+        },
       })
     }
   } catch (error) {
