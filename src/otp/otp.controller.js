@@ -90,6 +90,43 @@ const logControllerError = (label, error, errorId) => {
   console.error(`${label} [${errorId}]`, error)
 }
 
+const toNullableNumber = (value) => {
+  if (value === undefined || value === null || value === "") return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const isLegacySessionLogLocationError = (error) => {
+  if (!(error instanceof Prisma.PrismaClientValidationError)) return false
+  const message = String(error.message || "")
+  return message.includes("Unknown argument `latitude`") || message.includes("Unknown argument `longitude`")
+}
+
+const createSessionLogSafely = async ({ userId, ipAddress, latitude, longitude, userAgent }) => {
+  const baseData = {
+    userId,
+    ipAddress,
+    userAgent,
+  }
+
+  try {
+    return await prisma.sessionLog.create({
+      data: {
+        ...baseData,
+        latitude,
+        longitude,
+      },
+    })
+  } catch (error) {
+    if (!isLegacySessionLogLocationError(error)) {
+      throw error
+    }
+
+    console.warn("SessionLog schema does not support latitude/longitude. Saving session log without location.")
+    return prisma.sessionLog.create({ data: baseData })
+  }
+}
+
 // ===================== SEND OTP =====================
 export const sendOtp = async (req, res) => {
   try {
@@ -197,9 +234,7 @@ export const sendOtp = async (req, res) => {
 // ===================== VERIFY OTP =====================
 export const verifyOtp = async (req, res) => {
   try {
-    console.log(req.body)
    let { phone, mobile, otp, latitude, longitude } = req.body
-   console.log(latitude, longitude)
     
     phone = phone || mobile
 
@@ -234,7 +269,7 @@ const record = await prisma.otp.findFirst({
 
     // Check OTP expiration
    if (new Date(record.expiresAt) < new Date()) {
-  return res.status(400).json({ message: "OTP expired ⏳" })
+  return res.status(400).json({ message: "OTP expired" })
    }
 
     // Check if user exists, else create new user
@@ -256,18 +291,22 @@ const record = await prisma.otp.findFirst({
       })
     }
 
+    const latitudeValue = toNullableNumber(latitude)
+    const longitudeValue = toNullableNumber(longitude)
+
     // Create session log
-    const session = await prisma.sessionLog.create({
-      data: {
-        userId: user.id,
-        ipAddress: getClientIp(req),
-
-        latitude: latitude ? Number(latitude) : null,
-        longitude: longitude ? Number(longitude) : null,
-
-        userAgent: req.headers["user-agent"]?.slice(0, 255) || null
-      }
+    const session = await createSessionLogSafely({
+      userId: user.id,
+      ipAddress: getClientIp(req),
+      latitude: latitudeValue,
+      longitude: longitudeValue,
+      userAgent: req.headers["user-agent"]?.slice(0, 255) || null
     })
+
+    const authSecret = String(process.env.AUTH_SECRET || "").trim()
+    if (!authSecret) {
+      throw new Error("AUTH_SECRET is not configured")
+    }
 
     // Generate JWT Token
     const token = jwt.sign(
@@ -278,7 +317,7 @@ const record = await prisma.otp.findFirst({
         sessionId: session.id,
         jti: randomUUID()
       },
-      process.env.AUTH_SECRET,
+      authSecret,
       { expiresIn: "1d" }
     )
 
@@ -306,3 +345,4 @@ const record = await prisma.otp.findFirst({
   }
 
 }
+

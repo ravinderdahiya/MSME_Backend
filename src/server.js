@@ -25,6 +25,8 @@ const API_BASE_PATH = normalizeBasePath(process.env.API_BASE_PATH || "/")
 const withApiBasePath = (routePath) => `${API_BASE_PATH}${routePath}`
 const ENABLE_LEGACY_ROOT_ROUTES =
   String(process.env.ENABLE_LEGACY_ROOT_ROUTES || "true").toLowerCase() !== "false"
+const MAPSERVER_REQUIRE_AUTH =
+  String(process.env.MAPSERVER_REQUIRE_AUTH || "false").toLowerCase() === "true"
 
 const mountApiRoute = (routePath, ...middlewares) => {
   app.use(withApiBasePath(routePath), ...middlewares)
@@ -222,7 +224,11 @@ mountApiRoute("/user", userRoutes)
 mountApiRoute("/otp", otpRoutes)
 mountApiRoute("/api-url", apiUrlRoutes)
 mountApiRoute("/data-services", dataServiceRoutes)
-mountApiRoute("/mapserver", authMiddleware, mapserverRoutes)
+if (MAPSERVER_REQUIRE_AUTH) {
+  mountApiRoute("/mapserver", authMiddleware, mapserverRoutes)
+} else {
+  mountApiRoute("/mapserver", mapserverRoutes)
+}
 
 app.get("/", (req, res) => {
   res.send("Backend is running")
@@ -256,6 +262,7 @@ const startServer = async () => {
     console.log(`Server running on ${PORT}`)
     console.log(`API base path: ${API_BASE_PATH || "/"}`)
     console.log(`Legacy root routes: ${ENABLE_LEGACY_ROOT_ROUTES ? "enabled" : "disabled"}`)
+    console.log(`Mapserver auth: ${MAPSERVER_REQUIRE_AUTH ? "required" : "public"}`)
   })
 
   /*app.listen(PORT, '172.16.1.50', () => {

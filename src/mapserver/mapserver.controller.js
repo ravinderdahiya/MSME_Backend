@@ -1,10 +1,30 @@
 import axios from "axios"
 import prisma from "../config/db.js"
+import https from "https"
 
 const sanitizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "")
 const DEFAULT_ARCGIS_TOKEN_EXPIRY_MIN = 60
 const ARCGIS_TOKEN_EXPIRY_GRACE_MS = 60 * 1000
 const arcGisTokenCache = new Map()
+const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false })
+
+const shouldAllowSelfSignedCerts = () =>
+  ["1", "true", "yes", "on"].includes(
+    String(process.env.ARCGIS_ALLOW_SELF_SIGNED || "").trim().toLowerCase(),
+  )
+
+const getHttpsAgentForUrl = (url) => {
+  if (!shouldAllowSelfSignedCerts()) return undefined
+  try {
+    const parsed = new URL(String(url || ""))
+    if (parsed.protocol === "https:") {
+      return insecureHttpsAgent
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
 
 const buildProxyHeaders = (headers) => {
   const out = {}
@@ -125,6 +145,7 @@ const fetchTokenServicesUrlFromInfo = async (serviceUrl) => {
   if (!infoUrl) return ""
 
   const response = await axios.get(infoUrl, {
+    httpsAgent: getHttpsAgentForUrl(infoUrl),
     params: { f: "json" },
     timeout: 10000,
     validateStatus: () => true,
@@ -182,6 +203,7 @@ const generateArcGisToken = async (serviceUrl, req) => {
     }
 
     const response = await axios.post(tokenUrl, form.toString(), {
+      httpsAgent: getHttpsAgentForUrl(tokenUrl),
       headers: { "content-type": "application/x-www-form-urlencoded" },
       timeout: 20000,
       validateStatus: () => true,
@@ -284,6 +306,7 @@ export const proxyMapserverRequest = async (req, res) => {
     const upstream = await axios({
       method,
       url: targetUrl,
+      httpsAgent: getHttpsAgentForUrl(targetUrl),
       params: upstreamQuery,
       data: method === "POST" ? req.body : undefined,
       headers: upstreamHeaders,
