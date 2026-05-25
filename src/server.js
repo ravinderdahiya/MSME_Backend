@@ -1,6 +1,8 @@
 import express from "express"
 import dotenv from "dotenv"
 import bcrypt from "bcrypt"
+import path from "path"
+import { fileURLToPath } from "url"
 import prisma from "./config/db.js"
 import userRoutes from "./user/user.routes.js"
 import otpRoutes from "./otp/otp.routes.js"
@@ -11,7 +13,9 @@ import { getDefaultMapServiceEntriesFromEnv } from "./api-url/default-map-servic
 import cors from "cors"
 import { authMiddleware } from "./middleware/auth.middleware.js"
 
-dotenv.config()
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+dotenv.config({ path: path.resolve(__dirname, "../.env") })
 
 const app = express()
 
@@ -21,15 +25,32 @@ const normalizeBasePath = (value) => {
   return `/${raw.replace(/^\/+/, "").replace(/\/+$/, "")}`
 }
 
+const buildApiBasePathAliases = (value) => {
+  const normalized = normalizeBasePath(value || "/")
+  const aliases = new Set([normalized])
+  const parts = normalized.split("/").filter(Boolean)
+
+  // Support IIS sub-application hosting where the app virtual path may be stripped.
+  while (parts.length > 1) {
+    parts.shift()
+    aliases.add(`/${parts.join("/")}`)
+  }
+
+  return Array.from(aliases)
+}
+
 const API_BASE_PATH = normalizeBasePath(process.env.API_BASE_PATH || "/")
-const withApiBasePath = (routePath) => `${API_BASE_PATH}${routePath}`
+const API_BASE_PATH_ALIASES = buildApiBasePathAliases(API_BASE_PATH || "/")
+const withApiBasePath = (routePath, basePath = API_BASE_PATH) => `${basePath}${routePath}`
 const ENABLE_LEGACY_ROOT_ROUTES =
   String(process.env.ENABLE_LEGACY_ROOT_ROUTES || "true").toLowerCase() !== "false"
 const MAPSERVER_REQUIRE_AUTH =
   String(process.env.MAPSERVER_REQUIRE_AUTH || "false").toLowerCase() === "true"
 
 const mountApiRoute = (routePath, ...middlewares) => {
-  app.use(withApiBasePath(routePath), ...middlewares)
+  for (const basePath of API_BASE_PATH_ALIASES) {
+    app.use(withApiBasePath(routePath, basePath), ...middlewares)
+  }
 
   if (ENABLE_LEGACY_ROOT_ROUTES && API_BASE_PATH) {
     app.use(routePath, ...middlewares)
@@ -234,12 +255,27 @@ app.get("/", (req, res) => {
   res.send("Backend is running")
 })
 
-app.get(withApiBasePath("/health"), (req, res) => {
-  res.json({
-    status: "ok",
-    apiBasePath: API_BASE_PATH || "/",
+for (const basePath of API_BASE_PATH_ALIASES) {
+  if (!basePath) continue
+  app.get(basePath, (req, res) => {
+    res.json({
+      status: "ok",
+      apiBasePath: API_BASE_PATH || "/",
+      matchedBasePath: basePath,
+      message: "API root",
+    })
   })
-})
+}
+
+for (const basePath of API_BASE_PATH_ALIASES) {
+  app.get(withApiBasePath("/health", basePath), (req, res) => {
+    res.json({
+      status: "ok",
+      apiBasePath: API_BASE_PATH || "/",
+      matchedBasePath: basePath || "/",
+    })
+  })
+}
 
 if (ENABLE_LEGACY_ROOT_ROUTES && API_BASE_PATH) {
   app.get("/health", (req, res) => {
@@ -261,6 +297,7 @@ const startServer = async () => {
     app.listen(PORT, () => {
     console.log(`Server running on ${PORT}`)
     console.log(`API base path: ${API_BASE_PATH || "/"}`)
+    console.log(`API base aliases: ${API_BASE_PATH_ALIASES.join(", ") || "/"}`)
     console.log(`Legacy root routes: ${ENABLE_LEGACY_ROOT_ROUTES ? "enabled" : "disabled"}`)
     console.log(`Mapserver auth: ${MAPSERVER_REQUIRE_AUTH ? "required" : "public"}`)
   })
