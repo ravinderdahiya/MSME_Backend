@@ -464,10 +464,13 @@ export const getSessionLogs = async (req, res) => {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1)
     const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100)
     const skip = (page - 1) * limit
+    const userId = normalizeText(req.query.userId)
+    const where = userId ? { userId } : {}
 
     const [total, sessions] = await prisma.$transaction([
-      prisma.sessionLog.count(),
+      prisma.sessionLog.count({ where }),
       prisma.sessionLog.findMany({
+        where,
         skip,
         take: limit,
         orderBy: { loginAt: "desc" },
@@ -493,6 +496,34 @@ export const getSessionLogs = async (req, res) => {
     })
   } catch (error) {
     console.error("Get Session Logs Error:", error)
+    return res.status(500).json({ message: "Internal server error" })
+  }
+}
+
+export const getAdminUserSessions = async (req, res) => {
+  try {
+    const userId = normalizeText(req.params.id)
+    if (!userId) {
+      return res.status(400).json({ message: "Invalid user id" })
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        fullname: true,
+        email: true
+      }
+    })
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    req.query.userId = userId
+    return getSessionLogs(req, res)
+  } catch (error) {
+    console.error("Get Admin User Sessions Error:", error)
     return res.status(500).json({ message: "Internal server error" })
   }
 }

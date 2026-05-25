@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { signup, login, googleLogin, logout, getSessionLogs, adminLogin, getMe, getAdminUsers, updateAdminUserStatus } from "./user.controller.js"
+import { signup, login, googleLogin, logout, getSessionLogs, getAdminUserSessions, adminLogin, getMe, getAdminUsers, updateAdminUserStatus } from "./user.controller.js"
 import { authMiddleware, isAdmin } from "../middleware/auth.middleware.js"
 
 const router = Router()
@@ -15,6 +15,7 @@ router.get("/me", authMiddleware, getMe)
 
 router.get("/admin/session-logs", authMiddleware, isAdmin, getSessionLogs)
 router.get("/admin/users", authMiddleware, isAdmin, getAdminUsers)
+router.get("/admin/users/:id/sessions", authMiddleware, isAdmin, getAdminUserSessions)
 router.patch("/admin/users/:id/status", authMiddleware, isAdmin, updateAdminUserStatus)
 
 // Protected route
