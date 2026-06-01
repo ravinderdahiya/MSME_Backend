@@ -99,10 +99,12 @@ const toNullableNumber = (value) => {
 const isLegacySessionLogLocationError = (error) => {
   if (!(error instanceof Prisma.PrismaClientValidationError)) return false
   const message = String(error.message || "")
-  return message.includes("Unknown argument `latitude`") || message.includes("Unknown argument `longitude`")
+  return message.includes("Unknown argument `latitude`") ||
+    message.includes("Unknown argument `longitude`") ||
+    message.includes("Unknown argument `accuracy`")
 }
 
-const createSessionLogSafely = async ({ userId, ipAddress, latitude, longitude, userAgent }) => {
+const createSessionLogSafely = async ({ userId, ipAddress, latitude, longitude, accuracy, userAgent }) => {
   const baseData = {
     userId,
     ipAddress,
@@ -115,6 +117,7 @@ const createSessionLogSafely = async ({ userId, ipAddress, latitude, longitude, 
         ...baseData,
         latitude,
         longitude,
+        accuracy,
       },
     })
   } catch (error) {
@@ -234,7 +237,7 @@ export const sendOtp = async (req, res) => {
 // ===================== VERIFY OTP =====================
 export const verifyOtp = async (req, res) => {
   try {
-   let { phone, mobile, otp, latitude, longitude } = req.body
+   let { phone, mobile, otp, latitude, longitude, accuracy } = req.body
     
     phone = phone || mobile
 
@@ -293,6 +296,7 @@ const record = await prisma.otp.findFirst({
 
     const latitudeValue = toNullableNumber(latitude)
     const longitudeValue = toNullableNumber(longitude)
+    const accuracyValue = toNullableNumber(accuracy)
 
     // Create session log
     const session = await createSessionLogSafely({
@@ -300,6 +304,7 @@ const record = await prisma.otp.findFirst({
       ipAddress: getClientIp(req),
       latitude: latitudeValue,
       longitude: longitudeValue,
+      accuracy: accuracyValue,
       userAgent: req.headers["user-agent"]?.slice(0, 255) || null
     })
 
