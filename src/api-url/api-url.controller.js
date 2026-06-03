@@ -48,10 +48,74 @@ export const getFrontendConfig = async (req, res) => {
 
 export const listApiUrls = async (req, res) => {
   try {
-    const rows = await prisma.apiUrl.findMany({
-      orderBy: [{ category: "asc" }, { key: "asc" }],
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1)
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 100)
+    const skip = (page - 1) * limit
+
+    const search = String(req.query.search || "").trim()
+    const category = String(req.query.category || "All").trim()
+    const status = String(req.query.status || "All").trim().toLowerCase()
+
+    const where = {}
+
+    if (search) {
+      where.OR = [
+        { key: { contains: search, mode: "insensitive" } },
+        { name: { contains: search, mode: "insensitive" } },
+        { url: { contains: search, mode: "insensitive" } },
+        { description: { contains: search, mode: "insensitive" } },
+        { category: { contains: search, mode: "insensitive" } },
+      ]
+    }
+
+    if (category && category.toLowerCase() !== "all") {
+      where.category = { equals: category, mode: "insensitive" }
+    }
+
+    if (status === "active") where.isActive = true
+    if (status === "inactive") where.isActive = false
+
+    const [rows, total, activeCount, inactiveCount, categoryRows] = await Promise.all([
+      prisma.apiUrl.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ category: "asc" }, { key: "asc" }],
+      }),
+      prisma.apiUrl.count({ where }),
+      prisma.apiUrl.count({ where: { isActive: true } }),
+      prisma.apiUrl.count({ where: { isActive: false } }),
+      prisma.apiUrl.findMany({
+        distinct: ["category"],
+        orderBy: { category: "asc" },
+        select: { category: true },
+      }),
+    ])
+
+    const categoryOptions = [
+      "All",
+      ...categoryRows
+        .map((item) => String(item.category || "").trim())
+        .filter(Boolean),
+    ]
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(Math.ceil(total / limit), 1),
+      },
+      summary: {
+        total: activeCount + inactiveCount,
+        active: activeCount,
+        inactive: inactiveCount,
+      },
+      filters: {
+        categoryOptions,
+      },
     })
-    res.json({ data: rows })
   } catch (error) {
     console.error("listApiUrls error:", error)
     res.status(500).json({ message: "Failed to fetch API URLs" })
