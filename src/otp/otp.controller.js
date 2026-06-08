@@ -29,13 +29,32 @@ const formatSmsPhone = (normalizedPhone) => {
   return digits
 }
 
+const normalizeIpAddress = (value) => {
+  const ip = String(value || "").trim()
+  if (!ip) return null
+  if (ip === "::1") return "127.0.0.1"
+  if (ip.startsWith("::ffff:")) return ip.replace("::ffff:", "")
+  return ip
+}
+
+const isLoopbackIp = (value) => {
+  const ip = normalizeIpAddress(value)
+  return ip === "127.0.0.1" || ip === "localhost"
+}
+
 // Get client IP
 const getClientIp = (req) => {
   const forwarded = req.headers["x-forwarded-for"]
   if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0].trim()
+    return normalizeIpAddress(forwarded.split(",")[0])
   }
-  return req.ip || req.socket?.remoteAddress || null
+  return normalizeIpAddress(req.ip || req.socket?.remoteAddress)
+}
+
+const getTrustedClientIp = (req) => {
+  const serverIp = getClientIp(req)
+  const reportedIp = normalizeIpAddress(req.body?.clientIp || req.body?.publicIp)
+  return isLoopbackIp(serverIp) && reportedIp ? reportedIp : serverIp
 }
 
 const getSmsConfig = () => {
@@ -301,7 +320,7 @@ const record = await prisma.otp.findFirst({
     // Create session log
     const session = await createSessionLogSafely({
       userId: user.id,
-      ipAddress: getClientIp(req),
+      ipAddress: getTrustedClientIp(req),
       latitude: latitudeValue,
       longitude: longitudeValue,
       accuracy: accuracyValue,

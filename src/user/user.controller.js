@@ -35,14 +35,71 @@ const formatDateTime = (value) => {
   })
 }
 
+const normalizeIpAddress = (value) => {
+  const ip = normalizeText(value)
+  if (!ip) return null
+  if (ip === "::1") return "127.0.0.1"
+  if (ip.startsWith("::ffff:")) return ip.replace("::ffff:", "")
+  return ip
+}
+
+const isLoopbackIp = (value) => {
+  const ip = normalizeIpAddress(value)
+  return ip === "127.0.0.1" || ip === "localhost"
+}
+
+const getTrustedClientIp = (req) => {
+  const serverIp = getClientIp(req)
+  const reportedIp = normalizeIpAddress(req.body?.clientIp || req.body?.publicIp)
+  return isLoopbackIp(serverIp) && reportedIp ? reportedIp : serverIp
+}
+
 const getClientIp = (req) => {
   const forwarded = req.headers["x-forwarded-for"]
 
   if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0].trim()
+    return normalizeIpAddress(forwarded.split(",")[0])
   }
 
-  return req.ip || req.socket?.remoteAddress || null
+  return normalizeIpAddress(req.ip || req.socket?.remoteAddress)
+}
+
+const normalizeSessionLog = (session) => ({
+  ...session,
+  ipAddress: normalizeIpAddress(session.ipAddress)
+})
+
+const listSessionLogs = async ({ page, limit, userId }) => {
+  const skip = (page - 1) * limit
+  const where = userId ? { userId } : {}
+
+  const [total, sessions] = await prisma.$transaction([
+    prisma.sessionLog.count({ where }),
+    prisma.sessionLog.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { loginAt: "desc" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            fullname: true,
+            email: true,
+            role: true
+          }
+        }
+      }
+    })
+  ])
+
+  return {
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+    sessions: sessions.map(normalizeSessionLog)
+  }
 }
 
 // ================= SIGNUP =================
@@ -164,7 +221,7 @@ export const login = async (req, res) => {
     const session = await prisma.sessionLog.create({
       data: {
         userId: user.id,
-        ipAddress: getClientIp(req),
+        ipAddress: getTrustedClientIp(req),
         userAgent: req.headers["user-agent"]?.slice(0, 255) || null
       }
     })
@@ -270,7 +327,7 @@ export const googleLogin = async (req, res) => {
     const session = await prisma.sessionLog.create({
       data: {
         userId: user.id,
-        ipAddress: getClientIp(req),
+        ipAddress: getTrustedClientIp(req),
         userAgent: req.headers["user-agent"]?.slice(0, 255) || null
       }
     })
@@ -393,7 +450,7 @@ export const adminLogin = async (req, res) => {
     const session = await prisma.sessionLog.create({
       data: {
         userId: admin.id,
-        ipAddress: getClientIp(req),
+        ipAddress: getTrustedClientIp(req),
         userAgent: req.headers["user-agent"]?.slice(0, 255) || null
       }
     })
@@ -463,37 +520,9 @@ export const getSessionLogs = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1)
     const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100)
-    const skip = (page - 1) * limit
     const userId = normalizeText(req.query.userId)
-    const where = userId ? { userId } : {}
 
-    const [total, sessions] = await prisma.$transaction([
-      prisma.sessionLog.count({ where }),
-      prisma.sessionLog.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { loginAt: "desc" },
-        include: {
-          user: {
-            select: {
-              id: true,
-              fullname: true,
-              email: true,
-              role: true
-            }
-          }
-        }
-      })
-    ])
-
-    return res.json({
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-      sessions
-    })
+    return res.json(await listSessionLogs({ page, limit, userId }))
   } catch (error) {
     console.error("Get Session Logs Error:", error)
     return res.status(500).json({ message: "Internal server error" })
@@ -520,8 +549,10 @@ export const getAdminUserSessions = async (req, res) => {
       return res.status(404).json({ message: "User not found" })
     }
 
-    req.query.userId = userId
-    return getSessionLogs(req, res)
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1)
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100)
+
+    return res.json(await listSessionLogs({ page, limit, userId }))
   } catch (error) {
     console.error("Get Admin User Sessions Error:", error)
     return res.status(500).json({ message: "Internal server error" })
